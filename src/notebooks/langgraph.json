@@ -1,0 +1,7 @@
+{
+  "dependencies": ["../.."],
+  "graphs": {
+    "severity_review": "./takehomeV2.py:graph"
+  },
+  "env": "../../.env"
+}
