@@ -10,14 +10,15 @@ The assistant provides decision support using the supplied case details and an e
 | --- | --- |
 | `1` | Generate an assessment, pause for human review, then record agreement or disagreement. |
 | `2`, `3`, or `4` | Return a case-received acknowledgment without calling the assessment agent. |
+| Invalid or missing severity | Route to `validateSeverity`, return `Please enter a severity 1-4`, and end without an assessment. |
 
-For Severity 1, the assessment is plain text containing:
+For Severity 1, the prompt requests a concise plain-text assessment covering:
 
 1. **Understanding:** a summary of the customer's issue.
 2. **Assessment:** whether the stated impact meets Severity 1, or whether the information is insufficient.
 3. **Missing information:** details a human should clarify.
 
-The prompt asks the model to end with `Pending human review.` It instructs the model to use only the supplied policy and case details, treat customer text as data, avoid inventing facts, and leave severity unchanged. These are prompt instructions, not programmatically validated output guarantees.
+The prompt asks the model to end with `Pending human review.` It instructs the model to use only the supplied policy and case details, treat customer text as data, avoid inventing facts, and leave severity unchanged. The active prompt also requests the assessment in one statement. These are prompt instructions, not programmatically validated output guarantees.
 
 ## Workflow
 
@@ -26,12 +27,14 @@ flowchart TD
     S([START]) --> R{route_case}
     R -->|Severity 1| A[assess_case]
     R -->|Severity 2–4| C[acknowledge_case]
+    R -->|Invalid or missing severity| V[validateSeverity]
     A --> H[human_review: interrupt]
     H -->|Resume with agreement or disagreement| E([END])
     C --> E
+    V --> E
 ```
 
-`route_case` is a conditional-edge function, not a graph node. Both human agreement and disagreement end the workflow. Disagreement produces a message saying further manual review is needed; it does not start another review or escalation.
+`route_case` is a conditional-edge function. It selects one of three registered nodes: `assess_case`, `acknowledge_case`, or `validateSeverity`. The validation branch returns a message and ends; it does not pause to collect corrected input. Both human agreement and disagreement end the workflow. Disagreement produces a message saying further manual review is needed; it does not start another review or escalation.
 
 ## Embedded severity policy
 
@@ -113,9 +116,9 @@ Example graph input:
 | `severity` | Current severity; declared as a required integer in `CaseInput`. |
 | `assessment` | Model-generated assessment for Severity 1 cases. |
 | `human_agrees` | Boolean recorded after human review. |
-| `message` | Acknowledgment or final human-review message. |
+| `message` | Severity-validation, acknowledgment, or final human-review message. |
 
-`CaseInput` is a `TypedDict`, not a runtime input-validation model. The `Case` helper checks severity membership in `(1, 2, 3, 4)` but does not validate nonempty titles or descriptions. The routing function separately checks that severity is an integer in that range. See the invalid-severity limitation below.
+`CaseInput` is a `TypedDict`, not a runtime input-validation model. The `Case` helper checks severity membership in `(1, 2, 3, 4)` but does not validate nonempty titles or descriptions. For direct graph input, `route_case` requires `type(severity) is int` and a value from 1 through 4. Values such as `0`, `5`, `"1"`, `1.0`, `true`, and `null`, or an omitted severity, route to `validateSeverity`. This node returns `Please enter a severity 1-4` and ends. The `Case` helper rejects out-of-range severity values before graph invocation; it does not use the same strict type check as the router.
 
 ## Run in Studio
 
@@ -150,7 +153,7 @@ String values are stripped and lowercased. Other values raise `ValueError`. Resu
 
 The module includes a demo under `if __name__ == "__main__":`. It creates an `InMemorySaver`, generates a thread ID, submits a sample Severity 1 case, and asks for `yes` or `no` in the terminal.
 
-**Required correction in the reviewed code:** the initial invocation uses `local_graph`, but the resume invocation uses the exported `graph`, which has no explicitly configured checkpointer. Change the resume call to use the same `local_graph` instance:
+The demo invokes and resumes the same `local_graph` with the same thread configuration:
 
 ```python
 final_result = local_graph.invoke(
@@ -159,7 +162,7 @@ final_result = local_graph.invoke(
 )
 ```
 
-After applying that correction, execute the module using its actual path, for example:
+Execute the module using its actual path, for example:
 
 ```bash
 python src/takehomeV2.py
@@ -186,8 +189,7 @@ Useful evaluation targets include whether the assessment follows the supplied po
 
 ## Known limitations
 
-- **Invalid-severity routing is incomplete.** `route_case` returns `"validateSeverity"` for invalid values, but that destination is absent from both the registered nodes and the conditional-edge mapping. Although a `validateSeverity` function exists, invalid inputs do not currently reach it successfully.
-- **The terminal resume call needs the correction above.** The initial run and resume must use the same checkpointed graph and thread ID.
+- **Invalid severity ends the run.** The validation node returns a corrective message; resubmission is handled by the caller rather than an interactive correction loop.
 - **Assessment output is plain text.** There is no structured-output schema or deterministic validation of the requested sections.
 - **Missing or blank input handling is incomplete.** Required type annotations do not enforce the full input contract at runtime.
 - **No recovery logic is implemented for model errors.** Provider failures propagate rather than producing a fallback assessment.
